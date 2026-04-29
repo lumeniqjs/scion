@@ -1005,7 +1005,7 @@ func startRuntimeBroker(ctx context.Context, cmd *cobra.Command, cfg *config.Glo
 	slog.SetDefault(slog.Default().With(slog.String(logging.AttrBrokerID, brokerID)))
 
 	// Resolve hub endpoint for the runtime broker
-	hubEndpointForRH := resolveHubEndpointForBroker(cfg, hubEndpoint, settings)
+	hubEndpointForRH := resolveHubEndpointForBroker(cfg, settings)
 
 	// Auto-provide defaults
 	if enableHub && !cmd.Flags().Changed("auto-provide") {
@@ -1254,27 +1254,20 @@ func resolveBrokerName(cfg *config.GlobalConfig, settings *config.Settings, vsBr
 	return brokerName
 }
 
-// resolveHubEndpointForBroker determines the Hub endpoint URL for the runtime broker.
-func resolveHubEndpointForBroker(cfg *config.GlobalConfig, hubEndpoint string, settings *config.Settings) string {
+// resolveHubEndpointForBroker determines the Hub endpoint URL for the
+// runtime broker's internal communication (heartbeat, control channel).
+// In co-located mode (enableHub true), this always resolves to localhost
+// so the broker never routes through the external public URL.
+func resolveHubEndpointForBroker(cfg *config.GlobalConfig, settings *config.Settings) string {
 	hubEndpointForRH := cfg.RuntimeBroker.HubEndpoint
 	if hubEndpointForRH == "" && enableHub {
-		if hubEndpoint != "" {
-			// Use the already-resolved hub endpoint directly. It carries
-			// the correct port (e.g. web port 8080 in combo mode) and the
-			// broker is co-located so localhost is reachable.
-			hubEndpointForRH = hubEndpoint
-			if enableDebug {
-				log.Printf("Co-located Hub: using endpoint %s for broker and agents", hubEndpointForRH)
-			}
-		} else {
-			port := cfg.Hub.Port
-			if enableWeb {
-				port = webPort
-			}
-			hubEndpointForRH = fmt.Sprintf("http://localhost:%d", port)
-			if enableDebug {
-				log.Printf("Co-located Hub detected: using %s for heartbeat and template hydration", hubEndpointForRH)
-			}
+		port := cfg.Hub.Port
+		if enableWeb {
+			port = webPort
+		}
+		hubEndpointForRH = fmt.Sprintf("http://localhost:%d", port)
+		if enableDebug {
+			log.Printf("Co-located Hub detected: using %s for heartbeat and template hydration", hubEndpointForRH)
 		}
 	} else if hubEndpointForRH == "" && settings.Hub != nil {
 		hubEndpointForRH = settings.Hub.Endpoint

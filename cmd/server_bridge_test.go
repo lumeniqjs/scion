@@ -171,6 +171,93 @@ func TestResolveHubEndpointSettingsFallback(t *testing.T) {
 	})
 }
 
+func TestResolveHubEndpointForBroker(t *testing.T) {
+	origEnableHub := enableHub
+	origEnableDebug := enableDebug
+	origEnableWeb := enableWeb
+	origWebPort := webPort
+	defer func() {
+		enableHub = origEnableHub
+		enableDebug = origEnableDebug
+		enableWeb = origEnableWeb
+		webPort = origWebPort
+	}()
+
+	t.Run("co-located always uses localhost even with SCION_SERVER_BASE_URL", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		enableWeb = true
+		webPort = 8080
+		t.Setenv("SCION_SERVER_BASE_URL", "https://scionduet03.ameer.cloud")
+
+		cfg := &config.GlobalConfig{}
+		settings := &config.Settings{}
+
+		got := resolveHubEndpointForBroker(cfg, settings)
+		assert.Equal(t, "http://localhost:8080", got)
+	})
+
+	t.Run("co-located uses hub port when web disabled", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		enableWeb = false
+		webPort = 8080
+
+		cfg := &config.GlobalConfig{
+			Hub: config.HubServerConfig{Port: 9810},
+		}
+		settings := &config.Settings{}
+
+		got := resolveHubEndpointForBroker(cfg, settings)
+		assert.Equal(t, "http://localhost:9810", got)
+	})
+
+	t.Run("explicit RuntimeBroker.HubEndpoint takes priority", func(t *testing.T) {
+		enableHub = true
+		enableDebug = false
+		enableWeb = true
+		webPort = 8080
+
+		cfg := &config.GlobalConfig{
+			RuntimeBroker: config.RuntimeBrokerConfig{
+				HubEndpoint: "https://custom-hub.example.com",
+			},
+		}
+		settings := &config.Settings{}
+
+		got := resolveHubEndpointForBroker(cfg, settings)
+		assert.Equal(t, "https://custom-hub.example.com", got)
+	})
+
+	t.Run("non-hub mode uses settings endpoint", func(t *testing.T) {
+		enableHub = false
+		enableDebug = false
+		enableWeb = false
+
+		cfg := &config.GlobalConfig{}
+		settings := &config.Settings{
+			Hub: &config.HubClientConfig{
+				Endpoint: "https://remote-hub.example.com",
+			},
+		}
+
+		got := resolveHubEndpointForBroker(cfg, settings)
+		assert.Equal(t, "https://remote-hub.example.com", got)
+	})
+
+	t.Run("non-hub mode returns empty when no settings", func(t *testing.T) {
+		enableHub = false
+		enableDebug = false
+		enableWeb = false
+
+		cfg := &config.GlobalConfig{}
+		settings := &config.Settings{}
+
+		got := resolveHubEndpointForBroker(cfg, settings)
+		assert.Equal(t, "", got)
+	})
+}
+
 func TestIsLocalhostURL(t *testing.T) {
 	tests := []struct {
 		endpoint string
