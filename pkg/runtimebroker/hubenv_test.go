@@ -287,6 +287,72 @@ func TestApplyContainerBridgeOverride(t *testing.T) {
 	}
 }
 
+func TestColocatedExtraHosts(t *testing.T) {
+	tests := []struct {
+		name      string
+		endpoint  string
+		colocated bool
+		runtime   string
+		wantLen   int
+		wantFirst string
+	}{
+		{
+			name:      "colocated docker with public domain",
+			endpoint:  "https://hub.example.com",
+			colocated: true,
+			runtime:   "docker",
+			wantLen:   1,
+			wantFirst: "hub.example.com:host-gateway",
+		},
+		{
+			name:      "colocated docker with localhost",
+			endpoint:  "http://localhost:8080",
+			colocated: true,
+			runtime:   "docker",
+			wantLen:   0,
+		},
+		{
+			name:      "colocated kubernetes",
+			endpoint:  "https://hub.example.com",
+			colocated: true,
+			runtime:   "kubernetes",
+			wantLen:   0,
+		},
+		{
+			name:      "not colocated",
+			endpoint:  "https://hub.example.com",
+			colocated: false,
+			runtime:   "docker",
+			wantLen:   0,
+		},
+		{
+			name:      "colocated docker with IP address",
+			endpoint:  "https://34.30.80.76:443",
+			colocated: true,
+			runtime:   "docker",
+			wantLen:   0,
+		},
+		{
+			name:      "empty endpoint",
+			endpoint:  "",
+			colocated: true,
+			runtime:   "docker",
+			wantLen:   0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := colocatedExtraHosts(tt.endpoint, tt.colocated, tt.runtime)
+			if len(got) != tt.wantLen {
+				t.Fatalf("colocatedExtraHosts() returned %d entries, want %d: %v", len(got), tt.wantLen, got)
+			}
+			if tt.wantLen > 0 && got[0] != tt.wantFirst {
+				t.Errorf("colocatedExtraHosts()[0] = %q, want %q", got[0], tt.wantFirst)
+			}
+		})
+	}
+}
+
 func TestRedactEnvValueForLog(t *testing.T) {
 	if got := redactEnvValueForLog("SCION_AUTH_TOKEN", "secret-token"); got != redactedEnvValue {
 		t.Fatalf("SCION_AUTH_TOKEN should be redacted, got %q", got)

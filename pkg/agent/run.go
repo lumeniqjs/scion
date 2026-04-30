@@ -873,7 +873,7 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 		Debug:                util.DebugEnabled(),
 		Resume:               opts.Resume,
 		MetadataInterception: hasMetadataInterception(agentEnv),
-		ExtraHosts:           runtime.BridgeExtraHosts(m.Runtime.Name(), agentEnv),
+		ExtraHosts:           mergeExtraHosts(opts.ExtraHosts, runtime.BridgeExtraHosts(m.Runtime.Name(), agentEnv)),
 		NetworkMode:          dockerNetworkMode,
 		Labels: func() map[string]string {
 			l := map[string]string{
@@ -1200,4 +1200,27 @@ func hasMetadataInterception(env []string) bool {
 		}
 	}
 	return false
+}
+
+func mergeExtraHosts(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]bool, len(a))
+	result := make([]string, 0, len(a)+len(b))
+	for _, h := range a {
+		host, _, _ := strings.Cut(h, ":")
+		seen[host] = true
+		result = append(result, h)
+	}
+	for _, h := range b {
+		host, _, _ := strings.Cut(h, ":")
+		if !seen[host] {
+			result = append(result, h)
+		}
+	}
+	return result
 }

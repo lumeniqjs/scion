@@ -123,6 +123,25 @@ func applyContainerBridgeOverride(endpoint, containerHubEndpoint, runtimeName st
 	return bridgeURL.String()
 }
 
+// colocatedExtraHosts returns --add-host entries needed when the hub and
+// broker are co-located on the same machine. Docker bridge containers cannot
+// reach the host's own public domain via hairpin NAT (e.g. on GCE), so we
+// map the domain to host-gateway to route through the Docker bridge.
+func colocatedExtraHosts(hubEndpoint string, isColocated bool, runtimeName string) []string {
+	if !isColocated || runtimeName == "kubernetes" || hubEndpoint == "" || isLocalhostEndpoint(hubEndpoint) {
+		return nil
+	}
+	u, err := url.Parse(hubEndpoint)
+	if err != nil {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "" || net.ParseIP(host) != nil {
+		return nil
+	}
+	return []string{host + ":host-gateway"}
+}
+
 func redactEnvValueForLog(key, value string) string {
 	if _, ok := safeEnvLogKeys[key]; ok {
 		return value

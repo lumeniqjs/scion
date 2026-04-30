@@ -701,6 +701,7 @@ type StartOptions struct {
 	TelemetryOverride *bool           // Explicit telemetry override from CLI flags (--enable-telemetry / --disable-telemetry)
 	InlineConfig      *ScionConfig    // Inline config from --config flag, merged over template config
 	SharedDirs        []SharedDir     // Grove-level shared directories (from Hub, merged with settings)
+	ExtraHosts        []string        // Extra --add-host entries for container networking (e.g. "example.com:host-gateway")
 }
 
 type StatusEvent struct {

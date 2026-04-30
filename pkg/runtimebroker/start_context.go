@@ -218,6 +218,13 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 		runtimeName = s.runtime.Name()
 	}
 
+	// Resolve hub connection early — needed for colocated detection and
+	// template hydration below.
+	var hubConn *HubConnection
+	if in.HTTPRequest != nil {
+		hubConn = s.resolveHubConnection(in.HTTPRequest)
+	}
+
 	var hubEndpoint string
 	if in.HTTPRequest != nil {
 		// Full create path: request-level, connection-level, and broker-level fallbacks
@@ -247,6 +254,13 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 			s.agentLifecycleLog.Debug("SCION_HUB_ENDPOINT set", "agent_id", in.AgentID, "endpoint", hubEndpoint)
 		}
 	}
+
+	// Colocated bridge override: when the hub and broker are on the same
+	// machine, Docker bridge containers cannot reach the hub's public domain
+	// via hairpin NAT (e.g. on GCE). Map the domain to host-gateway so the
+	// container routes through the Docker bridge.
+	isColocated := hubConn != nil && hubConn.IsColocated
+	extraHosts := colocatedExtraHosts(hubEndpoint, isColocated, runtimeName)
 
 	// 5. Agent identity env
 	if in.Slug != "" {
@@ -344,6 +358,10 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 		opts.SharedDirs = in.SharedDirs
 	}
 
+	if len(extraHosts) > 0 {
+		opts.ExtraHosts = extraHosts
+	}
+
 	// Save template slug before hydration may replace opts.Template
 	templateSlug := ""
 	if in.Config != nil {
@@ -351,10 +369,6 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 	}
 
 	// --- Template hydration ---
-	var hubConn *HubConnection
-	if in.HTTPRequest != nil {
-		hubConn = s.resolveHubConnection(in.HTTPRequest)
-	}
 	if hubConn != nil && in.Config != nil {
 		templatePath, err := s.hydrateTemplate(ctx, in.Config, hubConn)
 		if err != nil {

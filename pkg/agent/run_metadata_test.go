@@ -16,6 +16,43 @@ package agent
 
 import "testing"
 
+func TestMergeExtraHosts(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+		want []string
+	}{
+		{name: "both nil", a: nil, b: nil, want: nil},
+		{name: "a only", a: []string{"foo:1.2.3.4"}, b: nil, want: []string{"foo:1.2.3.4"}},
+		{name: "b only", a: nil, b: []string{"bar:host-gateway"}, want: []string{"bar:host-gateway"}},
+		{
+			name: "no overlap",
+			a:    []string{"foo:1.2.3.4"},
+			b:    []string{"bar:host-gateway"},
+			want: []string{"foo:1.2.3.4", "bar:host-gateway"},
+		},
+		{
+			name: "a takes precedence on overlap",
+			a:    []string{"hub.example.com:host-gateway"},
+			b:    []string{"hub.example.com:172.17.0.1", "other:host-gateway"},
+			want: []string{"hub.example.com:host-gateway", "other:host-gateway"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeExtraHosts(tt.a, tt.b)
+			if len(got) != len(tt.want) {
+				t.Fatalf("mergeExtraHosts() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("mergeExtraHosts()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestHasMetadataInterception(t *testing.T) {
 	tests := []struct {
 		name string
