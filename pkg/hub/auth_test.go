@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/scion/pkg/apiclient"
+	"github.com/GoogleCloudPlatform/scion/pkg/util/logging"
 )
 
 func TestUnifiedAuthMiddleware_DevToken(t *testing.T) {
@@ -423,6 +424,196 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// newTestGCPCfgService builds a GCPIdentityService backed by the supplied fake
+// validator for middleware routing tests.
+func newMiddlewareGCPService(t *testing.T, fake OIDCValidator) *GCPIdentityService {
+	t.Helper()
+	svc, err := NewGCPIdentityService(testGCPAudience, testAllowlist(), fake)
+	if err != nil {
+		t.Fatalf("NewGCPIdentityService: %v", err)
+	}
+	return svc
+}
+
+func TestUnifiedAuthMiddleware_GCPIdentity_AllowlistedSA(t *testing.T) {
+	fake := &fakeOIDCValidator{payload: validGooglePayload(testAllowedSAEmail)}
+	cfg := AuthConfig{
+		Mode:           "production",
+		GCPIdentitySvc: newMiddlewareGCPService(t, fake),
+	}
+	middleware := UnifiedAuthMiddleware(cfg)
+
+	var gotIdentity Identity
+	var gotAuthType interface{}
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIdentity = GetIdentityFromContext(r.Context())
+		gotAuthType = r.Context().Value(logging.AuthTypeKey{})
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	token := makeUnsignedJWT(t, map[string]interface{}{
+		"iss":   googleIssuerHTTPS,
+		"aud":   testGCPAudience,
+		"email": testAllowedSAEmail,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 1 {
+		t.Errorf("expected GCP validator to be called once, got %d", fake.calls)
+	}
+	if gotIdentity == nil {
+		t.Fatal("expected identity in context")
+	}
+	if gotIdentity.ID() != gcpIdentitySubjectPrefix+testAllowedSAEmail {
+		t.Errorf("identity id = %q, want %q", gotIdentity.ID(), gcpIdentitySubjectPrefix+testAllowedSAEmail)
+	}
+	scoped, ok := gotIdentity.(*ScopedUserIdentity)
+	if !ok {
+		t.Fatalf("expected *ScopedUserIdentity, got %T", gotIdentity)
+	}
+	if scoped.ScopedProjectID() != testAllowedProjectID {
+		t.Errorf("project id = %q, want %q", scoped.ScopedProjectID(), testAllowedProjectID)
+	}
+	if gotAuthType != AuthTypeGCPIdentity {
+		t.Errorf("auth type = %v, want %q", gotAuthType, AuthTypeGCPIdentity)
+	}
+}
+
+func TestUnifiedAuthMiddleware_GCPIdentity_NonAllowlistedSA(t *testing.T) {
+	fake := &fakeOIDCValidator{payload: validGooglePayload(testNotAllowedSAEmail)}
+	cfg := AuthConfig{
+		Mode:           "production",
+		GCPIdentitySvc: newMiddlewareGCPService(t, fake),
+	}
+	middleware := UnifiedAuthMiddleware(cfg)
+
+	var gotIdentity Identity
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIdentity = GetIdentityFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	token := makeUnsignedJWT(t, map[string]interface{}{
+		"iss":   googleIssuerHTTPS,
+		"aud":   testGCPAudience,
+		"email": testNotAllowedSAEmail,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for non-allowlisted SA, got %d", rec.Code)
+	}
+	if gotIdentity != nil {
+		t.Error("expected no identity for rejected GCP token")
+	}
+}
+
+func TestUnifiedAuthMiddleware_GCPIdentity_NilSvcFallsThrough(t *testing.T) {
+	// With GCPIdentitySvc nil, a Google-issued JWT must fall through to the
+	// existing user-JWT path and fail there exactly as before (no behavior
+	// change when the feature is unconfigured).
+	userTokenSvc, err := NewUserTokenService(UserTokenConfig{})
+	if err != nil {
+		t.Fatalf("user token service: %v", err)
+	}
+	cfg := AuthConfig{
+		Mode:         "production",
+		UserTokenSvc: userTokenSvc,
+		// GCPIdentitySvc deliberately nil
+	}
+	middleware := UnifiedAuthMiddleware(cfg)
+
+	var gotIdentity Identity
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIdentity = GetIdentityFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	token := makeUnsignedJWT(t, map[string]interface{}{
+		"iss":   googleIssuerHTTPS,
+		"aud":   testGCPAudience,
+		"email": testAllowedSAEmail,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (user-JWT validation failure), got %d", rec.Code)
+	}
+	if gotIdentity != nil {
+		t.Error("expected no identity when feature unconfigured")
+	}
+}
+
+func TestUnifiedAuthMiddleware_GCPIdentity_DoesNotDivertOtherTokens(t *testing.T) {
+	// Regression guard: with GCPIdentitySvc configured, NON-Google tokens must
+	// NOT be routed to the GCP validator.
+	fake := &fakeOIDCValidator{payload: validGooglePayload(testAllowedSAEmail)}
+	gcpSvc := newMiddlewareGCPService(t, fake)
+
+	devToken := "scion_dev_test_token_12345678901234567890123456789012"
+
+	userTokenSvc, err := NewUserTokenService(UserTokenConfig{})
+	if err != nil {
+		t.Fatalf("user token service: %v", err)
+	}
+	userAccessToken, _, _, err := userTokenSvc.GenerateTokenPair(
+		"user-123", "test@example.com", "Test User", "member", ClientTypeWeb,
+	)
+	if err != nil {
+		t.Fatalf("generate user tokens: %v", err)
+	}
+
+	cfg := AuthConfig{
+		Mode:           "production",
+		DevAuthEnabled: true,
+		DevAuthToken:   devToken,
+		UserTokenSvc:   userTokenSvc,
+		GCPIdentitySvc: gcpSvc,
+	}
+	middleware := UnifiedAuthMiddleware(cfg)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name       string
+		authHeader string
+		wantStatus int
+	}{
+		{"dev token", "Bearer " + devToken, http.StatusOK},
+		{"scion-hub user JWT", "Bearer " + userAccessToken, http.StatusOK},
+		{"scion_pat_ UAT routes to UAT (not GCP)", "Bearer scion_pat_abc123def456", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := fake.calls
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+			req.Header.Set("Authorization", tc.authHeader)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (%s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if fake.calls != before {
+				t.Errorf("GCP validator must NOT be invoked for %s; calls went %d -> %d", tc.name, before, fake.calls)
+			}
+		})
+	}
 }
 
 func TestIsEmailAuthorized(t *testing.T) {

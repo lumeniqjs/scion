@@ -200,6 +200,9 @@ const (
 	AuthTypeAgent    = "agent"
 	AuthTypeBroker   = "broker"
 	AuthTypeProxy    = "proxy"
+	// AuthTypeGCPIdentity marks a request authenticated via a Google Cloud
+	// workload-identity OIDC token (see gcpidentityauth.go).
+	AuthTypeGCPIdentity = "gcp-identity"
 )
 
 // contextWithAuthType returns a new context with the auth type set.

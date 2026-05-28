@@ -38,6 +38,10 @@ type AuthConfig struct {
 	UserTokenSvc *UserTokenService
 	// UATSvc handles user access token validation
 	UATSvc *UserAccessTokenService
+	// GCPIdentitySvc validates inbound Google Cloud workload-identity OIDC
+	// tokens. When nil the GCP identity path is skipped entirely, preserving
+	// existing behavior on Hubs that do not configure the feature.
+	GCPIdentitySvc *GCPIdentityService
 	// TrustedProxies is a list of trusted proxy IPs/CIDRs
 	TrustedProxies []string
 	// Debug enables verbose logging
@@ -155,6 +159,36 @@ func UnifiedAuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 
 				writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized,
 					"missing authorization header", nil)
+				return
+			}
+
+			// Step 3.5: GCP workload-identity routing (ADDITIVE).
+			// If the GCP identity service is configured AND the bearer token is a
+			// JWT whose (UNVERIFIED) issuer is Google, route it to the GCP
+			// validator. The unverified issuer is used ONLY for routing; the
+			// token is fully verified inside ValidateToken (signature, audience,
+			// expiry, issuer, allowlist). When GCPIdentitySvc is nil this block is
+			// skipped and Google-issued tokens fall through to the existing
+			// user-JWT path exactly as before (where they fail validation).
+			if cfg.GCPIdentitySvc != nil && looksLikeJWT(token) && isGoogleIssuer(peekUnverifiedIssuer(token)) {
+				scopedUser, err := cfg.GCPIdentitySvc.ValidateToken(ctx, token)
+				if err != nil {
+					if cfg.Debug {
+						log.Debug("GCP identity auth rejected", "error", err.Error())
+					}
+					writeError(w, http.StatusUnauthorized, ErrCodeUnauthorized,
+						"invalid GCP identity token", nil)
+					return
+				}
+				ctx = context.WithValue(ctx, userContextKey{}, scopedUser)
+				ctx = contextWithIdentity(ctx, scopedUser)
+				ctx = contextWithAuthType(ctx, AuthTypeGCPIdentity)
+				if cfg.Debug {
+					log.Debug("GCP identity authenticated",
+						"email", scopedUser.Email(),
+						"project_id", scopedUser.ScopedProjectID())
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
