@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
 )
 
@@ -56,10 +57,23 @@ const (
 	// the ScopedUserIdentity plus any explicit policy grants.
 	gcpIdentityRole = "service"
 
-	// gcpIdentitySubjectPrefix namespaces the synthetic stable user id derived
-	// from a service-account email (e.g. "gcp-sa:mc-cloud-run-invoker@...").
+	// gcpIdentitySubjectPrefix namespaces GCP service-account principals in
+	// display names and deterministic UUID inputs.
 	gcpIdentitySubjectPrefix = "gcp-sa:"
 )
+
+// gcpIdentityNamespace is a fixed v5 namespace so the backing-user UUID for a
+// given service-account email is stable across restarts and across the verifier
+// and startup seed.
+var gcpIdentityNamespace = uuid.MustParse("7bdf5220-5b7e-4d57-9967-b6045c3fba44")
+
+// GCPIdentityUserID returns the deterministic backing-user UUID for a
+// service-account email. The mapping is case-insensitive and namespaced away
+// from human users.
+func GCPIdentityUserID(email string) string {
+	e := strings.ToLower(strings.TrimSpace(email))
+	return uuid.NewSHA1(gcpIdentityNamespace, []byte(gcpIdentitySubjectPrefix+e)).String()
+}
 
 // ErrGCPIdentityInvalid is returned for any verification failure on a GCP
 // identity token (bad signature, wrong audience, wrong issuer, expired,
@@ -90,7 +104,7 @@ func (googleOIDCValidator) Validate(ctx context.Context, token, audience string)
 
 // GCPIdentityGrant maps a trusted service account to the project it acts within
 // and the action scopes it is allowed to exercise. Scopes use the same
-// vocabulary as UATs (e.g. "agent:dispatch", "agent:read").
+// vocabulary as UATs (e.g. "agent:create", "agent:read").
 type GCPIdentityGrant struct {
 	ProjectID string
 	Scopes    []string
@@ -204,12 +218,12 @@ func (s *GCPIdentityService) ValidateToken(ctx context.Context, token string) (*
 		return nil, fmt.Errorf("%w: grant misconfigured for %s", ErrGCPIdentityInvalid, email)
 	}
 
-	// Map to a ScopedUserIdentity, mirroring UATSvc.ValidateToken. The synthetic
-	// user has a stable id derived from the SA email and a non-admin role.
+	// Map to a ScopedUserIdentity, mirroring UATSvc.ValidateToken. The backing
+	// user has a stable UUID derived from the SA email and a non-admin role.
 	user := NewAuthenticatedUser(
+		GCPIdentityUserID(email),
+		email,
 		gcpIdentitySubjectPrefix+email,
-		email,
-		email,
 		gcpIdentityRole,
 		string(ClientTypeAPI),
 	)
@@ -256,10 +270,9 @@ func DefaultGCPIdentityAllowlist() map[string]GCPIdentityGrant {
 		"mc-cloud-run-invoker@lumeniq-saas-factory.iam.gserviceaccount.com": {
 			ProjectID: "3152156d-67ef-415f-8ca5-903b446e2894",
 			Scopes: []string{
-				"agent:dispatch",
+				"agent:create",
 				"agent:read",
-				"agent:list",
-				"agent:stop",
+				"agent:attach",
 			},
 		},
 	}

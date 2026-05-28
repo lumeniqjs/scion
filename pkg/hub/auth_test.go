@@ -472,8 +472,8 @@ func TestUnifiedAuthMiddleware_GCPIdentity_AllowlistedSA(t *testing.T) {
 	if gotIdentity == nil {
 		t.Fatal("expected identity in context")
 	}
-	if gotIdentity.ID() != gcpIdentitySubjectPrefix+testAllowedSAEmail {
-		t.Errorf("identity id = %q, want %q", gotIdentity.ID(), gcpIdentitySubjectPrefix+testAllowedSAEmail)
+	if gotIdentity.ID() != GCPIdentityUserID(testAllowedSAEmail) {
+		t.Errorf("identity id = %q, want %q", gotIdentity.ID(), GCPIdentityUserID(testAllowedSAEmail))
 	}
 	scoped, ok := gotIdentity.(*ScopedUserIdentity)
 	if !ok {

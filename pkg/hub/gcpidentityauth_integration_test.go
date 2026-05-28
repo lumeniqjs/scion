@@ -61,8 +61,8 @@ func TestGCPIdentity_EndToEnd_ReachesProtectedHandler(t *testing.T) {
 	if sawScoped.ScopedProjectID() != testAllowedProjectID {
 		t.Errorf("scoped project = %q, want %q", sawScoped.ScopedProjectID(), testAllowedProjectID)
 	}
-	if !sawScoped.HasScope("agent:dispatch") {
-		t.Error("expected agent:dispatch scope on the identity")
+	if !sawScoped.HasScope("agent:create") {
+		t.Error("expected agent:create scope on the identity")
 	}
 	if sawScoped.Role() == "admin" {
 		t.Error("GCP SA identity must NOT carry the admin role")
@@ -89,14 +89,14 @@ func TestGCPIdentity_AuthzScopingMatchesUAT(t *testing.T) {
 
 	t.Run("in-project in-scope proceeds", func(t *testing.T) {
 		res := Resource{Type: "agent", ID: "agent-1", ParentType: "project", ParentID: testAllowedProjectID}
-		if denied := az.enforceUATConstraints(identity, res, ActionDispatch); denied != nil {
+		if denied := az.enforceUATConstraints(identity, res, ActionCreate); denied != nil {
 			t.Errorf("expected constraint to allow proceed, got deny: %s", denied.Reason)
 		}
 	})
 
 	t.Run("wrong project denied", func(t *testing.T) {
 		res := Resource{Type: "agent", ID: "agent-1", ParentType: "project", ParentID: "some-other-project"}
-		denied := az.enforceUATConstraints(identity, res, ActionDispatch)
+		denied := az.enforceUATConstraints(identity, res, ActionCreate)
 		if denied == nil || denied.Allowed {
 			t.Error("expected deny for resource in a different project")
 		}

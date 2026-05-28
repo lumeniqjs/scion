@@ -21,6 +21,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/google/uuid"
 	"google.golang.org/api/idtoken"
 )
 
@@ -53,7 +54,7 @@ func testAllowlist() map[string]GCPIdentityGrant {
 	return map[string]GCPIdentityGrant{
 		testAllowedSAEmail: {
 			ProjectID: testAllowedProjectID,
-			Scopes:    []string{"agent:dispatch", "agent:read", "agent:list", "agent:stop"},
+			Scopes:    []string{"agent:create", "agent:read", "agent:attach"},
 		},
 	}
 }
@@ -104,7 +105,7 @@ func TestGCPIdentityValidate_ValidAllowlistedSA(t *testing.T) {
 	if got := identity.ScopedProjectID(); got != testAllowedProjectID {
 		t.Errorf("project id = %q, want %q", got, testAllowedProjectID)
 	}
-	wantScopes := []string{"agent:dispatch", "agent:read", "agent:list", "agent:stop"}
+	wantScopes := []string{"agent:create", "agent:read", "agent:attach"}
 	for _, sc := range wantScopes {
 		if !identity.HasScope(sc) {
 			t.Errorf("expected scope %q to be present", sc)
@@ -113,8 +114,8 @@ func TestGCPIdentityValidate_ValidAllowlistedSA(t *testing.T) {
 	if identity.Email() != testAllowedSAEmail {
 		t.Errorf("email = %q, want %q", identity.Email(), testAllowedSAEmail)
 	}
-	if identity.ID() != gcpIdentitySubjectPrefix+testAllowedSAEmail {
-		t.Errorf("id = %q, want %q", identity.ID(), gcpIdentitySubjectPrefix+testAllowedSAEmail)
+	if identity.ID() != GCPIdentityUserID(testAllowedSAEmail) {
+		t.Errorf("id = %q, want %q", identity.ID(), GCPIdentityUserID(testAllowedSAEmail))
 	}
 	// CRITICAL: the synthetic principal must never carry the admin role (the
 	// authz layer admin-bypasses role=="admin").
@@ -145,8 +146,8 @@ func TestGCPIdentityValidate_ScopesAreDefensivelyCopied(t *testing.T) {
 	if identity.HasScope("agent:manage") {
 		t.Error("scope mutation leaked into authenticated identity; scopes were not copied")
 	}
-	if !identity.HasScope("agent:dispatch") {
-		t.Error("expected original agent:dispatch scope to be retained")
+	if !identity.HasScope("agent:create") {
+		t.Error("expected original agent:create scope to be retained")
 	}
 }
 
@@ -400,4 +401,15 @@ func makeUnsignedJWT(t *testing.T, claims map[string]interface{}) string {
 	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
 	sig := base64.RawURLEncoding.EncodeToString([]byte("not-a-real-signature"))
 	return header + "." + payload + "." + sig
+}
+
+func TestGCPIdentityUserID_StableAndUUID(t *testing.T) {
+	id1 := GCPIdentityUserID(" MC-Cloud-Run-Invoker@Lumeniq-Saas-Factory.IAM.GServiceAccount.com ")
+	id2 := GCPIdentityUserID(testAllowedSAEmail)
+	if id1 != id2 {
+		t.Fatalf("GCPIdentityUserID is not stable/case-insensitive: %q != %q", id1, id2)
+	}
+	if _, err := uuid.Parse(id1); err != nil {
+		t.Fatalf("GCPIdentityUserID = %q, want valid UUID: %v", id1, err)
+	}
 }

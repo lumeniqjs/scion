@@ -758,9 +758,11 @@ func New(cfg ServerConfig, s store.Store) (*Server, error) {
 			return nil, fmt.Errorf("gcp identity auth: %w", err)
 		}
 		srv.authConfig.GCPIdentitySvc = gcpIdentitySvc
+		seededGCPIdentityGrants := seedGCPIdentityGrants(ctx, s, cfg.GCPIdentityAllowlist)
 		slog.Info("Inbound GCP workload-identity auth enabled",
 			"audience", cfg.GCPIdentityAudience,
-			"allowlist_size", len(cfg.GCPIdentityAllowlist))
+			"allowlist_size", len(cfg.GCPIdentityAllowlist),
+			"seeded_grants", seededGCPIdentityGrants)
 	} else {
 		slog.Info("Inbound GCP workload-identity auth NOT configured (feature off)")
 	}
