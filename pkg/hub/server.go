@@ -137,6 +137,15 @@ type ServerConfig struct {
 	// GCPMintCapGlobal is the maximum total number of minted service accounts across all projects.
 	// Zero means unlimited (default).
 	GCPMintCapGlobal int
+	// GCPIdentityAudience is the expected audience (aud claim) for inbound GCP
+	// workload-identity OIDC tokens. When empty (together with an empty
+	// allowlist) the GCP identity auth path is disabled and there is no
+	// behavior change.
+	GCPIdentityAudience string
+	// GCPIdentityAllowlist maps trusted service-account emails to their project
+	// + scope grants for inbound GCP workload-identity auth. When empty the
+	// feature is disabled.
+	GCPIdentityAllowlist map[string]GCPIdentityGrant
 }
 
 // MaintenanceConfig holds configuration for routine maintenance operation executors.
@@ -738,6 +747,22 @@ func New(cfg ServerConfig, s store.Store) (*Server, error) {
 		TrustedProxies: cfg.TrustedProxies,
 		Debug:          cfg.Debug,
 		Logger:         srv.authLog,
+	}
+
+	// Initialize inbound GCP workload-identity auth (optional, additive).
+	// Feature is OFF unless BOTH an audience and a non-empty allowlist are
+	// configured -- this preserves existing behavior on Hubs that do not opt in.
+	if cfg.GCPIdentityAudience != "" && len(cfg.GCPIdentityAllowlist) > 0 {
+		gcpIdentitySvc, err := NewGCPIdentityService(cfg.GCPIdentityAudience, cfg.GCPIdentityAllowlist, nil)
+		if err != nil {
+			return nil, fmt.Errorf("gcp identity auth: %w", err)
+		}
+		srv.authConfig.GCPIdentitySvc = gcpIdentitySvc
+		slog.Info("Inbound GCP workload-identity auth enabled",
+			"audience", cfg.GCPIdentityAudience,
+			"allowlist_size", len(cfg.GCPIdentityAllowlist))
+	} else {
+		slog.Info("Inbound GCP workload-identity auth NOT configured (feature off)")
 	}
 
 	// Initialize Cloud Logging query service (optional, gated on GCP project ID)

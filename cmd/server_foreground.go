@@ -841,6 +841,10 @@ func initHubServer(ctx context.Context, cfg *config.GlobalConfig, s store.Store,
 		GCPProjectID:      cfg.Hub.GCPProjectID,
 	}
 
+	// Inbound GCP workload-identity auth (additive; off unless explicitly
+	// enabled via SCION_SERVER_GCP_IDENTITY_ENABLED=true).
+	hubCfg.GCPIdentityAudience, hubCfg.GCPIdentityAllowlist = resolveGCPIdentityAuth()
+
 	hubSrv, err := hub.New(hubCfg, s)
 	if err != nil {
 		return nil, fmt.Errorf("hub server initialization failed: %w", err)
@@ -1422,4 +1426,29 @@ func resolveMaintenanceConfig(cfg *config.GlobalConfig) hub.MaintenanceConfig {
 	}
 
 	return mc
+}
+
+// resolveGCPIdentityAuth resolves the inbound GCP workload-identity auth
+// configuration from the environment.
+//
+// The feature is OFF by default. It activates only when
+// SCION_SERVER_GCP_IDENTITY_ENABLED=true. When enabled:
+//   - the expected audience defaults to hub.GCPIdentityDefaultAudience
+//     (https://scion-hub.lumeniq.ai) and may be overridden with
+//     SCION_SERVER_GCP_IDENTITY_AUDIENCE;
+//   - the trusted-SA allowlist is seeded from hub.DefaultGCPIdentityAllowlist()
+//     (which enrolls MC's mc-cloud-run-invoker SA).
+//
+// When disabled it returns ("", nil) so the Hub leaves GCPIdentitySvc nil and
+// behaves exactly as before.
+func resolveGCPIdentityAuth() (audience string, allowlist map[string]hub.GCPIdentityGrant) {
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("SCION_SERVER_GCP_IDENTITY_ENABLED")), "true") {
+		return "", nil
+	}
+	audience = strings.TrimSpace(os.Getenv("SCION_SERVER_GCP_IDENTITY_AUDIENCE"))
+	if audience == "" {
+		audience = hub.GCPIdentityDefaultAudience
+	}
+	allowlist = hub.DefaultGCPIdentityAllowlist()
+	return audience, allowlist
 }
