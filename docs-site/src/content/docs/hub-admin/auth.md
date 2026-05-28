@@ -197,3 +197,67 @@ For programmatic access (e.g., CI/CD pipelines), the Hub supports Personal Acces
 - Tokens can be generated via the Web Dashboard or CLI.
 - Tokens are prefixed with `scion_pat_`.
 - Use the `Authorization: Bearer <token>` header in your requests.
+
+## Inbound GCP Workload-Identity Authentication
+
+For programmatic callers that already run under a Google Cloud service account
+(for example a Cloud Run service), the Hub can accept a short-lived Google OIDC
+identity token as an inbound bearer credential. This is an alternative to a
+static `scion_pat_` PAT and eliminates long-lived-credential rotation: the
+caller mints a fresh, self-expiring token from its own workload identity on
+every request.
+
+This feature is **additive and OFF by default**. When it is not configured the
+Hub's authentication behavior is unchanged.
+
+### How verification works
+
+A bearer token whose (unverified) `iss` claim is a Google issuer
+(`https://accounts.google.com` or `accounts.google.com`) is routed to the GCP
+identity verifier. The verifier **fails closed** and requires ALL of:
+
+1. A valid Google signature (verified against Google's cached JWKS).
+2. An `aud` claim that exactly matches the Hub's configured audience.
+3. A Google issuer (`iss`).
+4. An unexpired token (`exp`).
+5. An `email` claim that is present and (if `email_verified` is present) true.
+6. An `email` that appears in the Hub's **trusted service-account allowlist**.
+
+The allowlist is the sole authorization boundary: a token that is
+cryptographically valid but whose service-account email is not enrolled is
+rejected with `401`. An authenticated service account is mapped to a
+project-scoped principal carrying the project ID and action scopes from its
+allowlist grant (the same scope vocabulary as PATs, e.g. `agent:dispatch`,
+`agent:read`). The principal is never granted the `admin` role.
+
+### Configuration
+
+The feature is enabled with environment variables:
+
+```bash
+# Enable inbound GCP workload-identity auth (default: off)
+export SCION_SERVER_GCP_IDENTITY_ENABLED=true
+
+# Expected audience (aud) on inbound tokens. The CALLER must mint its OIDC
+# token with exactly this audience or it is rejected with a silent 401.
+# Defaults to https://scion-hub.lumeniq.ai when unset.
+export SCION_SERVER_GCP_IDENTITY_AUDIENCE="https://scion-hub.lumeniq.ai"
+```
+
+The trusted-SA allowlist is defined in code (so changes are reviewed in a PR)
+and is seeded for the LumenIQ deployment with the Mission Control dispatcher
+service account (`mc-cloud-run-invoker@...`) scoped to its project with
+`agent:dispatch`, `agent:read`, `agent:list`, and `agent:stop`.
+
+### Using it
+
+The caller mints an identity token for the pinned audience and sends it as a
+normal bearer token:
+
+```bash
+TOKEN=$(gcloud auth print-identity-token \
+  --impersonate-service-account=mc-cloud-run-invoker@lumeniq-saas-factory.iam.gserviceaccount.com \
+  --audiences=https://scion-hub.lumeniq.ai)
+
+curl -H "Authorization: Bearer ${TOKEN}" https://scion-hub.lumeniq.ai/api/v1/agents
+```
